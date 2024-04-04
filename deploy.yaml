@@ -1,0 +1,180 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ollama
+  name: ollama
+spec:
+  strategy:
+    type: Recreate
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: ollama
+      initContainers:
+      - image: ollama/ollama:latest
+        name: pull-model
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+        command:
+        - /bin/sh
+        - -c 
+        - ollama serve > /dev/null 2>&1 & sleep 10 && ollama pull mistral
+        volumeMounts:
+        - mountPath: "/root/.ollama"
+          name: storage
+      containers:
+      - image: ollama/ollama:latest
+        name: ollama
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+        ports:
+        - containerPort: 11434
+          name: ollama
+          protocol: TCP
+        volumeMounts:
+        - mountPath: "/root/.ollama"
+          name: storage
+      tolerations:
+      - key: "k8s.scaleway.com/node"
+        operator: "Equal"
+        value: "gpu"
+        effect: "NoSchedule"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: ollama
+  name: ollama
+spec:
+  ports:
+  - name: ollama
+    port: 11434
+    protocol: TCP
+    targetPort: 11434
+  selector:
+    app: ollama
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: chatbot
+  name: chatbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chatbot
+  template:
+    metadata:
+      labels:
+        app: chatbot
+    spec:
+      containers:
+      - image: ghcr.io/n-arno/chatbot:latest
+        name: chatbot
+        ports:
+        - containerPort: 8080
+          name: app
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: chatbot
+  name: chatbot
+spec:
+  ports:
+  - name: chatbot
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: chatbot
+  type: ClusterIP
+---
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: caddy
+  name: caddy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: caddy
+  template:
+    metadata:
+      labels:
+        app: caddy
+    spec:
+      containers:
+      - image: caddy:alpine
+        name: caddy
+        ports:
+        - containerPort: 80
+          name: http
+          protocol: TCP
+        - containerPort: 443
+          name: https
+          protocol: TCP
+        command:
+        - caddy
+        args:
+        - reverse-proxy
+        - -f
+        - <your-dns-entry>:443
+        - -t
+        - chatbot:8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    service.beta.kubernetes.io/scw-loadbalancer-zone: "fr-par-2"
+  labels:
+    app: caddy
+  name: caddy
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 80
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: 443
+  loadBalancerIP: <your-lb-ip>
+  selector:
+    app: caddy
+  type: LoadBalancer
