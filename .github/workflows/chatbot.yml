@@ -1,6 +1,6 @@
 name: Docker image chatbot
 on:
-  workflow_call:
+  workflow_dispatch:
   push:
     branches:
       - master
